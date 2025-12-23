@@ -9,6 +9,7 @@ export default function Speedometer() {
   const [isTracking, setIsTracking] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [distance, setDistance] = useState(0)
+  const [isRequestingPermission, setIsRequestingPermission] = useState(false)
   const watchIdRef = useRef<number | null>(null)
   const lastPositionRef = useRef<GeolocationPosition | null>(null)
 
@@ -74,37 +75,57 @@ export default function Speedometer() {
     }
   }, [isTracking, maxSpeed])
 
-  const toggleTracking = async () => {
-    if (!isTracking) {
-      // Para Safari/iOS, solicitar permissão explicitamente antes de iniciar
-      if (navigator.permissions && navigator.permissions.query) {
-        try {
-          const permissionStatus = await navigator.permissions.query({ name: 'geolocation' as PermissionName })
-          if (permissionStatus.state === 'denied') {
-            setError('Permissão de localização negada. Ative nas configurações do navegador.')
-            return
-          }
-        } catch (e) {
-          // Safari pode não suportar permissions.query para geolocation
-          console.log('Permissions API não disponível, continuando...')
-        }
+  const requestLocationPermission = async (): Promise<boolean> => {
+    return new Promise((resolve) => {
+      if (!navigator.geolocation) {
+        setError("Geolocalização não suportada pelo navegador")
+        resolve(false)
+        return
       }
 
-      // Fazer uma solicitação de teste primeiro para garantir permissão
-      try {
-        await new Promise<void>((resolve, reject) => {
-          navigator.geolocation.getCurrentPosition(
-            () => resolve(),
-            (err) => reject(err),
-            {
-              enableHighAccuracy: true,
-              maximumAge: 0,
-              timeout: 10000,
-            }
-          )
-        })
-      } catch (err) {
-        setError('Não foi possível obter permissão de localização. Verifique as configurações.')
+      setIsRequestingPermission(true)
+
+      // Safari/iOS requer esta abordagem direta
+      navigator.geolocation.getCurrentPosition(
+        () => {
+          // Permissão concedida
+          setError(null)
+          setIsRequestingPermission(false)
+          resolve(true)
+        },
+        (err) => {
+          // Permissão negada ou erro
+          console.error("Erro ao solicitar permissão:", err)
+          setIsRequestingPermission(false)
+
+          if (err.code === 1) {
+            // PERMISSION_DENIED
+            setError("Permissão de localização negada. Por favor, ative nas configurações do Safari:\n1. Configurações > Safari > Localização\n2. Ou toque no 'AA' na barra de endereço > Ajustes do Site > Localização > Permitir")
+          } else if (err.code === 2) {
+            // POSITION_UNAVAILABLE
+            setError("Localização indisponível. Certifique-se de estar ao ar livre com GPS ativo.")
+          } else if (err.code === 3) {
+            // TIMEOUT
+            setError("Tempo esgotado ao obter localização. Tente novamente.")
+          } else {
+            setError("Erro ao acessar localização: " + err.message)
+          }
+          resolve(false)
+        },
+        {
+          enableHighAccuracy: true,
+          timeout: 10000,
+          maximumAge: 0,
+        }
+      )
+    })
+  }
+
+  const toggleTracking = async () => {
+    if (!isTracking) {
+      // Solicitar permissão antes de iniciar
+      const hasPermission = await requestLocationPermission()
+      if (!hasPermission) {
         return
       }
     }
@@ -179,24 +200,25 @@ export default function Speedometer() {
 
           {/* Mensagem de erro */}
           {error && (
-            <div className="w-full rounded-lg bg-destructive/10 p-3 text-center text-sm text-destructive">{error}</div>
+            <div className="w-full rounded-lg bg-destructive/10 p-3 text-left text-sm text-destructive whitespace-pre-line">{error}</div>
           )}
 
           {/* Botões de controle */}
           <div className="flex w-full gap-3">
             <button
               onClick={toggleTracking}
+              disabled={isRequestingPermission}
               className={`flex-1 rounded-lg px-6 py-4 font-semibold transition-colors ${
                 isTracking
                   ? "bg-destructive text-destructive-foreground hover:bg-destructive/90"
                   : "bg-primary text-primary-foreground hover:bg-primary/90"
-              }`}
+              } disabled:opacity-50 disabled:cursor-not-allowed`}
             >
-              {isTracking ? "Parar" : "Iniciar"}
+              {isRequestingPermission ? "Aguardando permissão..." : isTracking ? "Parar" : "Iniciar"}
             </button>
             <button
               onClick={resetStats}
-              disabled={isTracking}
+              disabled={isTracking || isRequestingPermission}
               className="rounded-lg bg-secondary px-6 py-4 font-semibold text-secondary-foreground transition-colors hover:bg-secondary/80 disabled:opacity-50 disabled:cursor-not-allowed"
             >
               Resetar
